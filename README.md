@@ -1,9 +1,17 @@
 ![ImageDashboard](47B9CF34-5515-4630-8491-E25618DD9C8B.png)
 # KeepGoing 🚀
 
-**KeepGoing** is a collection of 100% Windows-native background monitoring scripts designed to automatically bypass API/rate limits for CLI AI agents (like **Claude Code**, **Antigravity**, and **OpenAI Codex CLI**) without requiring WSL, virtual environments, or heavy dependencies. 
+**KeepGoing** is a collection of 100% Windows-native background monitoring scripts designed to automatically resume CLI AI agents after their API/rate limits reset (like **Claude Code**, **Antigravity**, and **OpenAI Codex CLI**) without requiring WSL, virtual environments, or heavy dependencies. 
 
 It hooks into running terminal console buffers, detects rate limits, and simulates keystrokes to resume execution as soon as limits expire.
+
+---
+
+## ⚠️ Disclaimer & Safety
+
+**Terms of Service.** KeepGoing resumes a session by simulating keystrokes into an *interactive subscription session* — it does **not** access anything through an API key. Anthropic's (and other providers') Terms restrict automated / non-human access to their services except via an API key or where explicitly permitted. A reasonable reading is that automating a subscription CLI this way falls under that restriction. **Use at your own risk.** If you need ToS-safe automation, drive the agent through its official API key / headless mode instead.
+
+**Auto-resume can amplify a misbehaving agent.** Blindly sending `continue` after the agent has lost context can make things *worse* — it may forget the original constraints and spawn runaway work, burning your whole quota in minutes. Do **not** leave it unattended on open-ended or destructive tasks. Treat it as a convenience for resuming well-scoped work, not a hands-off autopilot.
 
 ---
 
