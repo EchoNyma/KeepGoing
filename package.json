@@ -1,0 +1,26 @@
+{
+  "name": "keepgoing",
+  "version": "1.0.0",
+  "description": "Windows-native background monitoring and auto-retry tool for Claude Code, Antigravity CLI, and OpenAI Codex CLI",
+  "main": "claude_attach.py",
+  "bin": {
+    "keepgoing-claude": "./bin/claude.js",
+    "keepgoing-antigravity": "./bin/antigravity.js",
+    "keepgoing-codex": "./bin/codex.js"
+  },
+  "files": [
+    "bin",
+    "claude_attach.py",
+    "antigravity_attach.py",
+    "codex_attach.py"
+  ],
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EchoNyma/KeepGoing.git"
+  },
+  "author": "EchoNyma",
+  "license": "MIT"
+}
