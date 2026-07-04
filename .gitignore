@@ -13,6 +13,7 @@ claude_attach_log.txt
 antigravity_attach_log.txt
 codex_attach_log.txt
 keepgoing_hook.cmd
+keepgoing_hook_codex.cmd
 temp_clones/
 .env
 .env.local

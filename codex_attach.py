@@ -4,6 +4,7 @@ import re
 import sys
 import os
 import time
+import json
 import argparse
 from datetime import datetime, timedelta
 
@@ -160,7 +161,6 @@ LIMIT_PATTERNS = [
 ]
 
 # Reset time patterns for Codex CLI
-# 1) Absolute date+time: "try again at Jul 20th, 2026 3:45 PM"
 RESET_ABSOLUTE_DATETIME = re.compile(
     r'try\s+again\s+at\s+'
     r'(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+'
@@ -170,19 +170,16 @@ RESET_ABSOLUTE_DATETIME = re.compile(
     re.I
 )
 
-# 2) Time only: "try again at 2:57 PM"
 RESET_TIME_ONLY = re.compile(
     r'try\s+again\s+at\s+(\d{1,2}):(\d{2})\s*(AM|PM)',
     re.I
 )
 
-# 3) Relative: "try again in 30 minutes" / "try again in 2 hours"
 RESET_RELATIVE = re.compile(
     r'try\s+again\s+in\s+(\d+)\s*(s|sec|seconds?|m|min|minutes?|h|hr|hours?)',
     re.I
 )
 
-# 4) Generic: "retry in X seconds/minutes"
 RESET_GENERIC = re.compile(
     r'retry\s+in\s+(\d+)\s*(s|sec|seconds?|m|min|minutes?|h|hr|hours?)',
     re.I
@@ -217,14 +214,6 @@ def _parse_unit_to_seconds(amount, unit):
 def get_wait_seconds(text, margin_seconds=60, fallback_seconds=3600):
     """
     Parse the console text for a Codex reset time and return wait seconds.
-    
-    Tries patterns in order of specificity:
-    1. Absolute date+time: "try again at Jul 20th, 2026 3:45 PM"
-    2. Time-only: "try again at 2:57 PM"  
-    3. Relative: "try again in 30 minutes"
-    4. Generic retry: "retry in 60 seconds"
-    
-    Returns fallback_seconds (default 1 hour) if nothing can be parsed.
     """
     lines = text.split('\n')
     
@@ -254,7 +243,6 @@ def get_wait_seconds(text, margin_seconds=60, fallback_seconds=3600):
                 pass
         
         # 2) Time-only: "try again at 2:57 PM"
-        # (Only match if the absolute pattern didn't already match on this line)
         if not RESET_ABSOLUTE_DATETIME.search(line):
             match = RESET_TIME_ONLY.search(line)
             if match:
@@ -270,7 +258,7 @@ def get_wait_seconds(text, margin_seconds=60, fallback_seconds=3600):
                 now = datetime.now()
                 target_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
                 
-                # If the target time is already past, assume it means tomorrow
+                # If target time is past, assume tomorrow
                 if target_time <= now:
                     target_time += timedelta(days=1)
                     
@@ -296,7 +284,7 @@ def get_wait_seconds(text, margin_seconds=60, fallback_seconds=3600):
 
 
 # ──────────────────────────────────────────────────────────────
-# Process detection via ctypes Toolhelp32Snapshot (fast, no powershell)
+# Process detection via ctypes Toolhelp32Snapshot
 # ──────────────────────────────────────────────────────────────
 
 def get_process_creation_time(pid):
@@ -318,7 +306,6 @@ def get_process_creation_time(pid):
 def find_active_codex_processes():
     """
     Find active OpenAI Codex CLI processes using Toolhelp32Snapshot.
-    Looks for processes named 'codex.exe' or 'node.exe' (with 'codex' in context).
     """
     try:
         h_snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
@@ -347,7 +334,6 @@ def find_active_codex_processes():
                     break
         kernel32.CloseHandle(h_snap)
         
-        # Prefer codex.exe processes over node.exe
         candidates = codex_candidates if codex_candidates else node_candidates
         
         results = []
@@ -356,12 +342,94 @@ def find_active_codex_processes():
             c["creation_time"] = ctime
             results.append(c)
             
-        # Sort by creation time, newest first
         results.sort(key=lambda x: x["creation_time"], reverse=True)
         return [{"pid": r["pid"], "cmd": r["name"]} for r in results]
     except Exception as e:
         print(f"[Error] Failed to enumerate processes: {e}")
         return []
+
+
+def get_grandparent_pid():
+    """Returns the PID of the grandparent process (the shell running Codex) using ctypes."""
+    my_pid = os.getpid()
+    
+    h_snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if h_snap == wintypes.HANDLE(-1).value or h_snap is None:
+        return None
+        
+    pe = PROCESSENTRY32W()
+    pe.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+    
+    parent_pid = None
+    grandparent_pid = None
+    
+    if kernel32.Process32FirstW(h_snap, ctypes.byref(pe)):
+        while True:
+            if pe.th32ProcessID == my_pid:
+                parent_pid = pe.th32ParentProcessID
+                break
+            if not kernel32.Process32NextW(h_snap, ctypes.byref(pe)):
+                break
+                
+        if parent_pid is not None:
+            kernel32.CloseHandle(h_snap)
+            h_snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+            if h_snap != wintypes.HANDLE(-1).value and h_snap is not None:
+                pe = PROCESSENTRY32W()
+                pe.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+                if kernel32.Process32FirstW(h_snap, ctypes.byref(pe)):
+                    while True:
+                        if pe.th32ProcessID == parent_pid:
+                            grandparent_pid = pe.th32ParentProcessID
+                            break
+                        if not kernel32.Process32NextW(h_snap, ctypes.byref(pe)):
+                            break
+                            
+    if h_snap and h_snap != wintypes.HANDLE(-1).value:
+        kernel32.CloseHandle(h_snap)
+        
+    return grandparent_pid
+
+
+def find_codex_ancestor():
+    """Tries to find the first ancestor process whose name contains 'codex', 'node', or 'python' by walking up the process tree."""
+    my_pid = os.getpid()
+    current_pid = my_pid
+    visited = set()
+    
+    for level in range(15):
+        h_snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+        if h_snap == wintypes.HANDLE(-1).value or h_snap is None:
+            break
+            
+        pe = PROCESSENTRY32W()
+        pe.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+        
+        parent_pid = None
+        process_name = ""
+        
+        if kernel32.Process32FirstW(h_snap, ctypes.byref(pe)):
+            while True:
+                if pe.th32ProcessID == current_pid:
+                    parent_pid = pe.th32ParentProcessID
+                    process_name = pe.szExeFile.lower()
+                    break
+                if not kernel32.Process32NextW(h_snap, ctypes.byref(pe)):
+                    break
+                    
+        kernel32.CloseHandle(h_snap)
+        
+        if not parent_pid or parent_pid in visited or parent_pid == 0:
+            break
+            
+        if current_pid != my_pid:
+            if "codex" in process_name or "node" in process_name or "python" in process_name:
+                return {"pid": current_pid, "name": process_name, "level": level}
+                
+        visited.add(current_pid)
+        current_pid = parent_pid
+        
+    return None
 
 
 # ──────────────────────────────────────────────────────────────
@@ -375,7 +443,6 @@ def read_console_text(h_stdout):
         return ""
     
     width = info.dwSize.X
-    height = info.dwSize.Y
     
     num_lines = min(50, info.dwCursorPosition.Y + 1)
     start_y = max(0, info.dwCursorPosition.Y - num_lines + 1)
@@ -447,6 +514,141 @@ def is_process_alive(h_process):
     return False
 
 
+def _find_pythonw():
+    """Finds pythonw.exe next to the current Python interpreter."""
+    python_dir = os.path.dirname(sys.executable)
+    pythonw = os.path.join(python_dir, "pythonw.exe")
+    if os.path.exists(pythonw):
+        return pythonw
+    import shutil
+    return shutil.which("pythonw.exe")
+
+
+def install_settings_hook():
+    """Installs the SessionStart hook in global Codex config.toml and hooks.json files."""
+    codex_dir = os.path.join(os.path.expanduser("~"), ".codex")
+    config_path = os.path.join(codex_dir, "config.toml")
+    hooks_path = os.path.join(codex_dir, "hooks.json")
+    
+    current_script = os.path.abspath(__file__)
+    script_dir = os.path.dirname(current_script)
+    
+    pythonw = _find_pythonw()
+    if not pythonw:
+        print("[Error] pythonw.exe not found. Please install Python with the standard Windows installer.")
+        sys.exit(1)
+        
+    hook_cmd_path = os.path.join(script_dir, "keepgoing_hook_codex.cmd")
+    with open(hook_cmd_path, "w", encoding="utf-8") as f:
+        f.write('@echo off\n')
+        f.write(f'powershell.exe -WindowStyle Hidden -Command "Start-Process \'{pythonw}\' -ArgumentList @(\'{current_script}\', \'--hook\') ; Start-Sleep -Milliseconds 500"\n')
+        
+    hook_command = f'"{hook_cmd_path}"'
+    
+    print(f"[Install] Using pythonw.exe: {pythonw}")
+    print(f"[Install] Generated hook wrapper: {hook_cmd_path}")
+    print(f"[Install] Target config directory: {codex_dir}")
+    
+    # 1. Enable hooks in config.toml
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                config_content = f.read()
+            
+            has_hooks_enabled = re.search(r'hooks\s*=\s*true', config_content, re.I)
+            if not has_hooks_enabled:
+                print("[Install] Enabling hooks feature in config.toml...")
+                new_content = config_content
+                if "[features]" in config_content:
+                    new_content = re.sub(r'(\[features\])', r'\1\nhooks = true', config_content, flags=re.I)
+                else:
+                    new_content += "\n\n[features]\nhooks = true\n"
+                with open(config_path, "w", encoding="utf-8") as f:
+                    f.write(new_content)
+        except Exception as e:
+            print(f"[Warning] Failed to update config.toml: {e}")
+    else:
+        try:
+            os.makedirs(codex_dir, exist_ok=True)
+            with open(config_path, "w", encoding="utf-8") as f:
+                f.write("[features]\nhooks = true\n")
+            print("[Install] Created config.toml with hooks enabled.")
+        except Exception as e:
+            print(f"[Error] Failed to create config.toml: {e}")
+            sys.exit(1)
+            
+    # 2. Add hook to hooks.json
+    hooks_data = {}
+    if os.path.exists(hooks_path):
+        try:
+            with open(hooks_path, "r", encoding="utf-8") as f:
+                hooks_data = json.load(f)
+        except Exception as e:
+            print(f"[Error] Failed to read hooks.json: {e}")
+            sys.exit(1)
+            
+    if "hooks" not in hooks_data:
+        hooks_data["hooks"] = {}
+    if "SessionStart" not in hooks_data["hooks"]:
+        hooks_data["hooks"]["SessionStart"] = []
+        
+    session_start_hooks = hooks_data["hooks"]["SessionStart"]
+    hook_exists = False
+    clean_hooks = []
+    
+    for hook_entry in session_start_hooks:
+        is_keepgoing = False
+        for hook_action in hook_entry.get("hooks", []):
+            cmd = hook_action.get("command", "")
+            if "codex_attach" in cmd or "keepgoing_hook_codex" in cmd:
+                is_keepgoing = True
+                break
+        if is_keepgoing:
+            if not hook_exists:
+                clean_hooks.append({
+                    "matcher": "*",
+                    "hooks": [{"type": "command", "command": hook_command}]
+                })
+                hook_exists = True
+                print("[Install] Found existing hook. Updating to current location...")
+        else:
+            clean_hooks.append(hook_entry)
+            
+    if not hook_exists:
+        print("[Install] Registering new SessionStart hook in hooks.json...")
+        clean_hooks.append({
+            "matcher": "*",
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": hook_command
+                }
+            ]
+        })
+        
+    hooks_data["hooks"]["SessionStart"] = clean_hooks
+    
+    try:
+        os.makedirs(codex_dir, exist_ok=True)
+        with open(hooks_path, "w", encoding="utf-8") as f:
+            json.dump(hooks_data, f, indent=2)
+        print("[Install] Successfully configured Codex SessionStart hook!")
+        print("[Install] KeepGoing will now start automatically whenever you run Codex CLI.")
+    except Exception as e:
+        print(f"[Error] Failed to write hooks.json: {e}")
+        sys.exit(1)
+
+
+def _log(log_path, message):
+    """Append a message to the logfile. Safe to call even without a console."""
+    try:
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(f"[{datetime.now()}] {message}\n")
+            f.flush()
+    except Exception:
+        pass
+
+
 # ──────────────────────────────────────────────────────────────
 # Main entry point
 # ──────────────────────────────────────────────────────────────
@@ -454,27 +656,64 @@ def is_process_alive(h_process):
 def main():
     parser = argparse.ArgumentParser(description="KeepGoing: Windows-native background auto-retry wrapper for OpenAI Codex CLI.")
     parser.add_argument("pid", nargs="?", type=int, default=None, help="Process ID of the Codex console session to attach to.")
+    parser.add_argument("--hook", action="store_true", help="Launch in automatic Hook mode (detects grandparent PID automatically).")
+    parser.add_argument("--install", action="store_true", help="Register the SessionStart hook in global Codex config.")
     parser.add_argument("--margin", type=int, default=60, help="Margin in seconds to wait after rate-limit reset (default 60).")
     parser.add_argument("--fallback", type=int, default=3600, help="Fallback seconds to wait if reset time cannot be parsed (default 3600 = 1 hour).")
     parser.add_argument("--log-path", type=str, default=None, help="Custom path for the logfile.")
     
     args = parser.parse_args()
 
+    if args.install:
+        install_settings_hook()
+        sys.exit(0)
+
     target_pid = args.pid
+    is_hook = args.hook
+    
+    log_path = args.log_path
+    if log_path is None:
+        log_path = os.path.join(os.path.expanduser("~"), "codex_attach_log.txt")
+
+    # If in hook mode, IMMEDIATELY lookup the ancestor process tree before any parent process exits
+    ancestor = None
+    if is_hook and target_pid is None:
+        ancestor = find_codex_ancestor()
+        if ancestor:
+            target_pid = ancestor["pid"]
+            _log(log_path, f"Hook mode: successfully resolved calling Codex process by walking ancestry tree: PID {target_pid} ({ancestor['name']}) at tree level {ancestor['level']}")
+        else:
+            _log(log_path, "Hook mode: failed to find Codex process in the parent tree.")
+
+    # In hook mode, wait briefly so Codex CLI has time to fully initialize
+    if is_hook:
+        _log(log_path, f"Hook mode started (my PID={os.getpid()}, passed PID={target_pid})")
+        time.sleep(2)
+
+    if is_hook and target_pid is None:
+        target_pid = get_grandparent_pid()
+        _log(log_path, f"Grandparent PID lookup returned: {target_pid}")
+
     if target_pid is None:
-        print("[Attach] Searching for active Codex sessions...")
+        if not is_hook:
+            print("[Attach] Searching for active Codex sessions...")
         processes = find_active_codex_processes()
         
         if not processes:
-            print("[Attach] No active Codex session found.")
+            if not is_hook:
+                print("[Attach] No active Codex session found.")
+            _log(log_path, "No active Codex session found. Exiting.")
             sys.exit(1)
             
-        print(f"\n[Attach] Found Codex processes:")
-        for idx, p in enumerate(processes):
-            print(f" [{idx}] PID: {p['pid']} | Process: {p['cmd']}")
+        _log(log_path, f"Found {len(processes)} Codex process(es): {processes}")
+
+        if not is_hook:
+            print(f"\n[Attach] Found Codex processes:")
+            for idx, p in enumerate(processes):
+                print(f" [{idx}] PID: {p['pid']} | Process: {p['cmd']}")
             
         target_idx = 0
-        if len(processes) > 1:
+        if len(processes) > 1 and not is_hook:
             try:
                 choice = input(f"\nPlease select the process index (0-{len(processes)-1}) [Default 0]: ").strip()
                 if choice:
@@ -484,10 +723,13 @@ def main():
                 
         target_pid = processes[target_idx]['pid']
 
+    _log(log_path, f"Target PID resolved to: {target_pid}")
+
     # Check for duplicate watchers using a named Mutex
     mutex_name = f"Local\\KeepGoing_Codex_{target_pid}"
     h_mutex = kernel32.CreateMutexW(None, False, mutex_name)
     if kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+        _log(log_path, f"Duplicate watcher detected for PID {target_pid}. Exiting.")
         if h_mutex:
             kernel32.CloseHandle(h_mutex)
         sys.exit(0)
@@ -495,27 +737,32 @@ def main():
     # Get process handle to check for liveness
     h_process = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, target_pid)
     if not h_process:
-        print(f"[Error] Failed to open process handle for PID {target_pid}. Error: {kernel32.GetLastError()}")
+        err = kernel32.GetLastError()
+        if not is_hook:
+            print(f"[Error] Failed to open process handle for PID {target_pid}. Error: {err}")
+        _log(log_path, f"Failed to open process handle for PID {target_pid}. Error: {err}")
         if h_mutex:
             kernel32.CloseHandle(h_mutex)
         sys.exit(1)
 
-    log_path = args.log_path
-    if log_path is None:
-        log_path = os.path.join(os.path.expanduser("~"), "codex_attach_log.txt")
-
-    print(f"\n[Attach] Attaching to Codex console of process with PID {target_pid}...")
-    print("[Attach] Successfully initialized! This window is now muted.")
-    print(f"[Attach] Logs are written to: {log_path}\n")
-    sys.stdout.flush()
-    time.sleep(0.5)
+    if not is_hook:
+        print(f"\n[Attach] Attaching to Codex console of process with PID {target_pid}...")
+        print("[Attach] Successfully initialized! This window is now muted.")
+        print(f"[Attach] Logs are written to: {log_path}\n")
+        sys.stdout.flush()
+        time.sleep(0.5)
     
     # Detach from our console and attach to target
     kernel32.FreeConsole()
     if not kernel32.AttachConsole(target_pid):
-        kernel32.AllocConsole()
-        print(f"[Error] Failed to attach console to PID {target_pid}. Error: {kernel32.GetLastError()}")
+        err = kernel32.GetLastError()
+        if not is_hook:
+            kernel32.AllocConsole()
+            print(f"[Error] Failed to attach console to PID {target_pid}. Error: {err}")
+        _log(log_path, f"Failed to AttachConsole to PID {target_pid}. Error: {err}")
         kernel32.CloseHandle(h_process)
+        if h_mutex:
+            kernel32.CloseHandle(h_mutex)
         sys.exit(1)
         
     h_stdin = kernel32.GetStdHandle(STD_INPUT_HANDLE)
@@ -545,8 +792,18 @@ def main():
                         log.write(f"[{datetime.now()}] Codex rate limit detected! Waiting for {wait_seconds}s...\n")
                         log.flush()
                         
-                        time.sleep(wait_seconds)
-                        
+                        slept = 0
+                        while slept < wait_seconds:
+                            if not is_process_alive(h_process):
+                                break
+                            time.sleep(1)
+                            slept += 1
+                            
+                        if not is_process_alive(h_process):
+                            log.write(f"[{datetime.now()}] Target process {target_pid} exited during rate limit wait. Stopping monitor.\n")
+                            log.flush()
+                            break
+                            
                         send_enter_to_console(h_stdin)
                         
                         log.write(f"[{datetime.now()}] Enter successfully sent to Codex console!\n")
