@@ -257,6 +257,8 @@ def get_wait_seconds(text, margin_seconds=60, fallback_seconds=3600):
                 delta = (target_time - datetime.now()).total_seconds()
                 if delta > 0:
                     return int(delta) + margin_seconds
+                else:
+                    return 0
             except ValueError:
                 pass
         
@@ -276,8 +278,12 @@ def get_wait_seconds(text, margin_seconds=60, fallback_seconds=3600):
                 now = datetime.now()
                 target_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
                 
-                # If target time is past, assume tomorrow
+                # If target time is in the past, check if it's recent (less than 12 hours ago).
+                # If so, the limit has already reset, so we return 0.
+                # Otherwise, assume the reset time is for tomorrow.
                 if target_time <= now:
+                    if (now - target_time).total_seconds() < 12 * 3600:
+                        return 0
                     target_time += timedelta(days=1)
                     
                 delta = (target_time - now).total_seconds()
