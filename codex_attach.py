@@ -17,6 +17,24 @@ KEY_EVENT = 0x0001
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 STILL_ACTIVE = 259
 
+# Setup CreateFileW
+GENERIC_READ = 0x80000000
+GENERIC_WRITE = 0x40000000
+FILE_SHARE_READ = 0x00000001
+FILE_SHARE_WRITE = 0x00000002
+OPEN_EXISTING = 3
+
+kernel32.CreateFileW.argtypes = [
+    wintypes.LPCWSTR,
+    wintypes.DWORD,
+    wintypes.DWORD,
+    ctypes.c_void_p,
+    wintypes.DWORD,
+    wintypes.DWORD,
+    wintypes.HANDLE
+]
+kernel32.CreateFileW.restype = wintypes.HANDLE
+
 # Ctypes structures for Windows Console API
 class COORD(ctypes.Structure):
     _fields_ = [("X", wintypes.SHORT), ("Y", wintypes.SHORT)]
@@ -765,11 +783,40 @@ def main():
             kernel32.CloseHandle(h_mutex)
         sys.exit(1)
         
-    h_stdin = kernel32.GetStdHandle(STD_INPUT_HANDLE)
-    h_stdout = kernel32.GetStdHandle(STD_OUTPUT_HANDLE)
+    # Open handles to the attached console buffer (using CreateFileW for CONIN$/CONOUT$ to bypass pythonw.exe std handle limits)
+    h_stdin = kernel32.CreateFileW(
+        "CONIN$",
+        GENERIC_READ | GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        None,
+        OPEN_EXISTING,
+        0,
+        None
+    )
+    if h_stdin == wintypes.HANDLE(-1).value or h_stdin is None or h_stdin == 0:
+        h_stdin = kernel32.GetStdHandle(STD_INPUT_HANDLE)
+
+    h_stdout = kernel32.CreateFileW(
+        "CONOUT$",
+        GENERIC_READ | GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        None,
+        OPEN_EXISTING,
+        0,
+        None
+    )
+    if h_stdout == wintypes.HANDLE(-1).value or h_stdout is None or h_stdout == 0:
+        h_stdout = kernel32.GetStdHandle(STD_OUTPUT_HANDLE)
     
     with open(log_path, "a") as log:
         log.write(f"\n--- Codex Monitoring started for PID {target_pid} at {datetime.now()} ---\n")
+        
+        # Verify screen buffer access
+        info = CONSOLE_SCREEN_BUFFER_INFO()
+        if not kernel32.GetConsoleScreenBufferInfo(h_stdout, ctypes.byref(info)):
+            log.write(f"[{datetime.now()}] [Error] GetConsoleScreenBufferInfo failed for h_stdout={h_stdout}. Error code: {kernel32.GetLastError()}\n")
+        else:
+            log.write(f"[{datetime.now()}] Successfully attached to screen buffer. Dimensions: {info.dwSize.X}x{info.dwSize.Y}, Cursor: {info.dwCursorPosition.X},{info.dwCursorPosition.Y}\n")
         log.flush()
         
         last_check_rate_limit = False
