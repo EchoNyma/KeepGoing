@@ -526,6 +526,7 @@ def send_resume_to_console(h_stdin):
         written = wintypes.DWORD(0)
         kernel32.WriteConsoleInputW(h_stdin, ctypes.byref(ev_down), 1, ctypes.byref(written))
         kernel32.WriteConsoleInputW(h_stdin, ctypes.byref(ev_up), 1, ctypes.byref(written))
+        time.sleep(0.05)  # Subtle pause to simulate natural keystrokes and avoid buffer race conditions
 
 
 def is_process_alive(h_process):
