@@ -861,6 +861,7 @@ def main():
                         
                         log.write(f"[{datetime.now()}] 'keep going' command successfully sent to Codex console!\n")
                         log.flush()
+                        last_check_rate_limit = False
                 else:
                     last_check_rate_limit = False
                     
