@@ -233,6 +233,7 @@ def get_wait_seconds(text, margin_seconds=60, fallback_seconds=3600):
     """
     Parse the console text for a Codex reset time and return wait seconds.
     """
+    return 0  # Always bypass wait and type 'keep going' immediately for Codex
     lines = text.split('\n')
     
     for line in reversed(lines):
