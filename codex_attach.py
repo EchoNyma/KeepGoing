@@ -487,9 +487,9 @@ def read_console_text(h_stdout):
     return "\n".join(lines)
 
 
-def send_enter_to_console(h_stdin):
-    """Send a single Enter keypress to the attached console."""
-    text = "\n"
+def send_resume_to_console(h_stdin):
+    """Send 'keep going' command followed by Enter to the attached console."""
+    text = "keep going\n"
     for char in text:
         ev_down = INPUT_RECORD()
         ev_down.EventType = KEY_EVENT
@@ -857,9 +857,9 @@ def main():
                             log.flush()
                             break
                             
-                        send_enter_to_console(h_stdin)
+                        send_resume_to_console(h_stdin)
                         
-                        log.write(f"[{datetime.now()}] Enter successfully sent to Codex console!\n")
+                        log.write(f"[{datetime.now()}] 'keep going' command successfully sent to Codex console!\n")
                         log.flush()
                 else:
                     last_check_rate_limit = False
