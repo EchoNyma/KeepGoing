@@ -211,17 +211,13 @@ MONTH_MAP = {
 
 
 def is_rate_limited(text):
-    """Check if the console text contains an unhandled Codex rate limit message."""
+    """Check if the console text contains a Codex rate limit message in the active view."""
     lines = text.split('\n')
-    last_keep_going_idx = -1
-    for i, line in enumerate(lines):
-        if "keep going" in line.lower():
-            last_keep_going_idx = i
-            
-    for i, line in enumerate(lines):
-        if i > last_keep_going_idx:
-            if any(p.search(line) for p in LIMIT_PATTERNS):
-                return True
+    # Only check the last 6 lines of the buffer (the active prompt area)
+    active_lines = lines[-6:]
+    for line in active_lines:
+        if any(p.search(line) for p in LIMIT_PATTERNS):
+            return True
     return False
 
 
