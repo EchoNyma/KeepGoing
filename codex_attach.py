@@ -873,7 +873,6 @@ def main():
         log.flush()
         
         last_check_rate_limit = False
-        last_send_time = 0
         
         try:
             while True:
@@ -886,17 +885,25 @@ def main():
                 screen_text = read_console_text(h_stdout)
                 
                 if is_rate_limited(screen_text):
-                    now_ts = time.time()
-                    if not last_check_rate_limit or (now_ts - last_send_time >= 60):
-                        if not last_check_rate_limit:
-                            log.write(f"[{datetime.now()}] Codex rate limit detected! Sending keep going...\n")
-                        else:
-                            log.write(f"[{datetime.now()}] Codex rate limit still active. Retrying keep going...\n")
+                    if not last_check_rate_limit:
+                        last_check_rate_limit = True
+                        wait_seconds = get_wait_seconds(screen_text, margin_seconds=args.margin, fallback_seconds=args.fallback)
+                        
+                        log.write(f"[{datetime.now()}] Codex rate limit detected! Waiting for {wait_seconds}s...\n")
                         log.flush()
                         
-                        last_check_rate_limit = True
-                        last_send_time = now_ts
-                        
+                        slept = 0
+                        while slept < wait_seconds:
+                            if not is_process_alive(h_process):
+                                break
+                            time.sleep(1)
+                            slept += 1
+                            
+                        if not is_process_alive(h_process):
+                            log.write(f"[{datetime.now()}] Target process {target_pid} exited during rate limit wait. Stopping monitor.\n")
+                            log.flush()
+                            break
+                            
                         send_resume_to_console(h_stdin)
                         
                         log.write(f"[{datetime.now()}] 'keep going' command successfully sent to Codex console!\n")
