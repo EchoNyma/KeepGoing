@@ -213,8 +213,8 @@ MONTH_MAP = {
 def is_rate_limited(text):
     """Check if the console text contains a Codex rate limit message in the active view."""
     text_lower = text.lower()
-    # If the console is working or displaying the resumed greeting prompt, it is not rate limited
-    if "use /skills" in text_lower or "working" in text_lower or "◦" in text:
+    # If the console is working, it is not rate limited
+    if "working" in text_lower or "◦" in text:
         return False
         
     lines = text.split('\n')
@@ -505,6 +505,32 @@ def send_focus_event(h_stdin):
 
 def send_resume_to_console(h_stdin):
     """Send 'keep going' command followed by Enter to the attached console."""
+    # Clear prompt first by sending backspaces
+    for _ in range(30):
+        ev_down_back = INPUT_RECORD()
+        ev_down_back.EventType = KEY_EVENT
+        ev_down_back.Event.KeyEvent.bKeyDown = True
+        ev_down_back.Event.KeyEvent.wRepeatCount = 1
+        ev_down_back.Event.KeyEvent.wVirtualKeyCode = 8  # VK_BACK
+        ev_down_back.Event.KeyEvent.wVirtualScanCode = 14
+        ev_down_back.Event.KeyEvent.uChar.UnicodeChar = '\x08'
+        ev_down_back.Event.KeyEvent.dwControlKeyState = 0
+        
+        ev_up_back = INPUT_RECORD()
+        ev_up_back.EventType = KEY_EVENT
+        ev_up_back.Event.KeyEvent.bKeyDown = False
+        ev_up_back.Event.KeyEvent.wRepeatCount = 1
+        ev_up_back.Event.KeyEvent.wVirtualKeyCode = 8
+        ev_up_back.Event.KeyEvent.wVirtualScanCode = 14
+        ev_up_back.Event.KeyEvent.uChar.UnicodeChar = '\x08'
+        ev_up_back.Event.KeyEvent.dwControlKeyState = 0
+        
+        written = wintypes.DWORD(0)
+        kernel32.WriteConsoleInputW(h_stdin, ctypes.byref(ev_down_back), 1, ctypes.byref(written))
+        time.sleep(0.01)
+        kernel32.WriteConsoleInputW(h_stdin, ctypes.byref(ev_up_back), 1, ctypes.byref(written))
+        time.sleep(0.01)
+
     text = "keep going\n"
     for char in text:
         ev_down = INPUT_RECORD()
@@ -847,6 +873,7 @@ def main():
         log.flush()
         
         last_check_rate_limit = False
+        last_send_time = 0
         
         try:
             while True:
@@ -859,25 +886,17 @@ def main():
                 screen_text = read_console_text(h_stdout)
                 
                 if is_rate_limited(screen_text):
-                    if not last_check_rate_limit:
-                        last_check_rate_limit = True
-                        wait_seconds = get_wait_seconds(screen_text, margin_seconds=args.margin, fallback_seconds=args.fallback)
-                        
-                        log.write(f"[{datetime.now()}] Codex rate limit detected! Waiting for {wait_seconds}s...\n")
+                    now_ts = time.time()
+                    if not last_check_rate_limit or (now_ts - last_send_time >= 60):
+                        if not last_check_rate_limit:
+                            log.write(f"[{datetime.now()}] Codex rate limit detected! Sending keep going...\n")
+                        else:
+                            log.write(f"[{datetime.now()}] Codex rate limit still active. Retrying keep going...\n")
                         log.flush()
                         
-                        slept = 0
-                        while slept < wait_seconds:
-                            if not is_process_alive(h_process):
-                                break
-                            time.sleep(1)
-                            slept += 1
-                            
-                        if not is_process_alive(h_process):
-                            log.write(f"[{datetime.now()}] Target process {target_pid} exited during rate limit wait. Stopping monitor.\n")
-                            log.flush()
-                            break
-                            
+                        last_check_rate_limit = True
+                        last_send_time = now_ts
+                        
                         send_resume_to_console(h_stdin)
                         
                         log.write(f"[{datetime.now()}] 'keep going' command successfully sent to Codex console!\n")
