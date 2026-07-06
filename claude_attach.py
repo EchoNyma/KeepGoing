@@ -401,6 +401,15 @@ def read_console_text(h_stdout):
     return "\n".join(lines)
 
 
+def send_focus_event(h_stdin):
+    """Send a FOCUS_EVENT to the console input buffer to force it to process pending input immediately."""
+    ev = INPUT_RECORD()
+    ev.EventType = 0x0010  # FOCUS_EVENT
+    ev.Event.KeyEvent.bKeyDown = True  # Sets bSetFocus = True
+    written = wintypes.DWORD(0)
+    kernel32.WriteConsoleInputW(h_stdin, ctypes.byref(ev), 1, ctypes.byref(written))
+
+
 def send_continue_to_console(h_stdin):
     text = "continue\n"
     for char in text:
@@ -438,7 +447,12 @@ def send_continue_to_console(h_stdin):
         
         written = wintypes.DWORD(0)
         kernel32.WriteConsoleInputW(h_stdin, ctypes.byref(ev_down), 1, ctypes.byref(written))
+        time.sleep(0.05)  # Subtle pause to simulate natural keystrokes and avoid buffer race conditions
         kernel32.WriteConsoleInputW(h_stdin, ctypes.byref(ev_up), 1, ctypes.byref(written))
+        time.sleep(0.05)
+        
+    # Send a FOCUS_EVENT to ensure the input buffer is immediately read and processed
+    send_focus_event(h_stdin)
 
 
 def _find_pythonw():
