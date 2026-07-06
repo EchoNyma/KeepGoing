@@ -212,6 +212,11 @@ MONTH_MAP = {
 
 def is_rate_limited(text):
     """Check if the console text contains a Codex rate limit message in the active view."""
+    text_lower = text.lower()
+    # If the console is working or displaying the resumed greeting prompt, it is not rate limited
+    if "use /skills" in text_lower or "working" in text_lower or "◦" in text:
+        return False
+        
     lines = text.split('\n')
     # Only check the last 6 lines of the buffer (the active prompt area)
     active_lines = lines[-6:]
