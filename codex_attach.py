@@ -240,7 +240,6 @@ def get_wait_seconds(text, margin_seconds=60, fallback_seconds=3600):
     """
     Parse the console text for a Codex reset time and return wait seconds.
     """
-    return 0  # Always bypass wait and type 'keep going' immediately for Codex
     lines = text.split('\n')
     
     for line in reversed(lines):
@@ -496,45 +495,55 @@ def read_console_text(h_stdout):
 
 
 def send_resume_to_console(h_stdin):
-    """Send 'keep going' command followed by Enter to the attached console."""
-    text = "keep going\n"
-    for char in text:
-        ev_down = INPUT_RECORD()
-        ev_down.EventType = KEY_EVENT
-        ev_down.Event.KeyEvent.bKeyDown = True
-        ev_down.Event.KeyEvent.wRepeatCount = 1
-        
-        if char == '\n' or char == '\r':
-            ev_down.Event.KeyEvent.wVirtualKeyCode = 13  # VK_RETURN
-            ev_down.Event.KeyEvent.wVirtualScanCode = 28  # Enter scan code
-            ev_down.Event.KeyEvent.uChar.UnicodeChar = '\r'
-        else:
-            ev_down.Event.KeyEvent.wVirtualKeyCode = 0
-            ev_down.Event.KeyEvent.wVirtualScanCode = 0
-            ev_down.Event.KeyEvent.uChar.UnicodeChar = char
-            
-        ev_down.Event.KeyEvent.dwControlKeyState = 0
-        
-        ev_up = INPUT_RECORD()
-        ev_up.EventType = KEY_EVENT
-        ev_up.Event.KeyEvent.bKeyDown = False
-        ev_up.Event.KeyEvent.wRepeatCount = 1
-        
-        if char == '\n' or char == '\r':
-            ev_up.Event.KeyEvent.wVirtualKeyCode = 13  # VK_RETURN
-            ev_up.Event.KeyEvent.wVirtualScanCode = 28  # Enter scan code
-            ev_up.Event.KeyEvent.uChar.UnicodeChar = '\r'
-        else:
-            ev_up.Event.KeyEvent.wVirtualKeyCode = 0
-            ev_up.Event.KeyEvent.wVirtualScanCode = 0
-            ev_up.Event.KeyEvent.uChar.UnicodeChar = char
-            
-        ev_up.Event.KeyEvent.dwControlKeyState = 0
-        
-        written = wintypes.DWORD(0)
-        kernel32.WriteConsoleInputW(h_stdin, ctypes.byref(ev_down), 1, ctypes.byref(written))
-        kernel32.WriteConsoleInputW(h_stdin, ctypes.byref(ev_up), 1, ctypes.byref(written))
-        time.sleep(0.05)  # Subtle pause to simulate natural keystrokes and avoid buffer race conditions
+    """Send Up Arrow followed by Enter to the attached console to retry the last command."""
+    # 1) Send Up Arrow (VK_UP = 38, Scan Code = 72)
+    ev_down = INPUT_RECORD()
+    ev_down.EventType = KEY_EVENT
+    ev_down.Event.KeyEvent.bKeyDown = True
+    ev_down.Event.KeyEvent.wRepeatCount = 1
+    ev_down.Event.KeyEvent.wVirtualKeyCode = 38  # VK_UP
+    ev_down.Event.KeyEvent.wVirtualScanCode = 72
+    ev_down.Event.KeyEvent.uChar.UnicodeChar = '\x00'
+    ev_down.Event.KeyEvent.dwControlKeyState = 0
+    
+    ev_up = INPUT_RECORD()
+    ev_up.EventType = KEY_EVENT
+    ev_up.Event.KeyEvent.bKeyDown = False
+    ev_up.Event.KeyEvent.wRepeatCount = 1
+    ev_up.Event.KeyEvent.wVirtualKeyCode = 38
+    ev_up.Event.KeyEvent.wVirtualScanCode = 72
+    ev_up.Event.KeyEvent.uChar.UnicodeChar = '\x00'
+    ev_up.Event.KeyEvent.dwControlKeyState = 0
+    
+    written = wintypes.DWORD(0)
+    kernel32.WriteConsoleInputW(h_stdin, ctypes.byref(ev_down), 1, ctypes.byref(written))
+    time.sleep(0.05)
+    kernel32.WriteConsoleInputW(h_stdin, ctypes.byref(ev_up), 1, ctypes.byref(written))
+    
+    time.sleep(0.1)  # Brief pause between keys
+    
+    # 2) Send Enter (VK_RETURN = 13, Scan Code = 28)
+    ev_down_enter = INPUT_RECORD()
+    ev_down_enter.EventType = KEY_EVENT
+    ev_down_enter.Event.KeyEvent.bKeyDown = True
+    ev_down_enter.Event.KeyEvent.wRepeatCount = 1
+    ev_down_enter.Event.KeyEvent.wVirtualKeyCode = 13  # VK_RETURN
+    ev_down_enter.Event.KeyEvent.wVirtualScanCode = 28
+    ev_down_enter.Event.KeyEvent.uChar.UnicodeChar = '\r'
+    ev_down_enter.Event.KeyEvent.dwControlKeyState = 0
+    
+    ev_up_enter = INPUT_RECORD()
+    ev_up_enter.EventType = KEY_EVENT
+    ev_up_enter.Event.KeyEvent.bKeyDown = False
+    ev_up_enter.Event.KeyEvent.wRepeatCount = 1
+    ev_up_enter.Event.KeyEvent.wVirtualKeyCode = 13
+    ev_up_enter.Event.KeyEvent.wVirtualScanCode = 28
+    ev_up_enter.Event.KeyEvent.uChar.UnicodeChar = '\r'
+    ev_up_enter.Event.KeyEvent.dwControlKeyState = 0
+    
+    kernel32.WriteConsoleInputW(h_stdin, ctypes.byref(ev_down_enter), 1, ctypes.byref(written))
+    time.sleep(0.05)
+    kernel32.WriteConsoleInputW(h_stdin, ctypes.byref(ev_up_enter), 1, ctypes.byref(written))
 
 
 def is_process_alive(h_process):
