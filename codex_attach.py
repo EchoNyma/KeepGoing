@@ -14,6 +14,7 @@ kernel32 = ctypes.windll.kernel32
 STD_INPUT_HANDLE = -10
 STD_OUTPUT_HANDLE = -11
 KEY_EVENT = 0x0001
+FOCUS_EVENT = 0x0010
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 STILL_ACTIVE = 259
 
@@ -69,9 +70,13 @@ class KEY_EVENT_RECORD(ctypes.Structure):
         ("dwControlKeyState", wintypes.DWORD)
     ]
 
+class FOCUS_EVENT_RECORD(ctypes.Structure):
+    _fields_ = [("bSetFocus", wintypes.BOOL)]
+
 class EVENT_UNION(ctypes.Union):
     _fields_ = [
         ("KeyEvent", KEY_EVENT_RECORD),
+        ("FocusEvent", FOCUS_EVENT_RECORD),
         ("Filler", wintypes.DWORD * 4)
     ]
 
@@ -169,13 +174,17 @@ kernel32.GetProcessTimes.restype = wintypes.BOOL
 # ──────────────────────────────────────────────────────────────
 # OpenAI Codex CLI rate limit patterns
 # ──────────────────────────────────────────────────────────────
-LIMIT_PATTERNS = [
+LIMIT_MESSAGE_PATTERNS = [
     re.compile(r"You['\u2019]ve hit your usage limit", re.I),
-    re.compile(r'try again at', re.I),
     re.compile(r'rate limit', re.I),
     re.compile(r'Rate limit exceeded', re.I),
     re.compile(r'\b429\b'),
     re.compile(r'usage limit', re.I),
+]
+
+LIMIT_PATTERNS = [
+    *LIMIT_MESSAGE_PATTERNS,
+    re.compile(r'try again at', re.I),
 ]
 
 # Reset time patterns for Codex CLI
@@ -211,17 +220,25 @@ MONTH_MAP = {
 
 
 def is_rate_limited(text):
-    """Check if the console text contains a Codex rate limit message in the active view."""
-    text_lower = text.lower()
-    # If the console is working, it is not rate limited
-    if "working" in text_lower or "◦" in text:
-        return False
-        
+    """Check whether the visible console buffer contains a Codex rate-limit block."""
     lines = text.split('\n')
-    # Only check the last 6 lines of the buffer (the active prompt area)
-    active_lines = lines[-6:]
-    for line in active_lines:
-        if any(p.search(line) for p in LIMIT_PATTERNS):
+
+    # Codex can print the limit and then immediately print its startup greeting.
+    # Scanning only the prompt tail misses that case, so scan the whole visible
+    # buffer for an explicit limit line and accept nearby reset text as context.
+    for i, line in enumerate(lines):
+        if any(p.search(line) for p in LIMIT_MESSAGE_PATTERNS):
+            start = max(0, i - 8)
+            end = min(len(lines), i + 9)
+            context = "\n".join(lines[start:end])
+            if (
+                RESET_ABSOLUTE_DATETIME.search(context)
+                or RESET_TIME_ONLY.search(context)
+                or RESET_RELATIVE.search(context)
+                or RESET_GENERIC.search(context)
+                or "try again" in context.lower()
+            ):
+                return True
             return True
     return False
 
@@ -497,8 +514,8 @@ def read_console_text(h_stdout):
 def send_focus_event(h_stdin):
     """Send a FOCUS_EVENT to the console input buffer to force it to process pending input immediately."""
     ev = INPUT_RECORD()
-    ev.EventType = 0x0010  # FOCUS_EVENT
-    ev.Event.KeyEvent.bKeyDown = True  # Sets bSetFocus = True
+    ev.EventType = FOCUS_EVENT
+    ev.Event.FocusEvent.bSetFocus = True
     written = wintypes.DWORD(0)
     kernel32.WriteConsoleInputW(h_stdin, ctypes.byref(ev), 1, ctypes.byref(written))
 
