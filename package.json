@@ -1,21 +1,24 @@
 {
   "name": "keepgoing",
   "version": "1.0.0",
-  "description": "Windows-native background monitoring and auto-retry tool for Claude Code, Antigravity CLI, and OpenAI Codex CLI",
+  "description": "Windows-native background monitoring and auto-retry tool for Claude Code, Antigravity CLI, OpenAI Codex CLI, and ChatGPT Desktop App",
   "main": "claude_attach.py",
   "bin": {
     "keepgoing-claude": "./bin/claude.js",
     "keepgoing-antigravity": "./bin/antigravity.js",
-    "keepgoing-codex": "./bin/codex.js"
+    "keepgoing-codex": "./bin/codex.js",
+    "keepgoing-chatgpt": "./bin/chatgpt.js"
   },
   "files": [
     "bin",
     "claude_attach.py",
     "antigravity_attach.py",
-    "codex_attach.py"
+    "codex_attach.py",
+    "chatgpt_attach.py",
+    "keepgoing_chatgpt/*.py"
   ],
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 0"
+    "test": "python -m unittest discover -s tests -v"
   },
   "repository": {
     "type": "git",

@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":2,"result":{"rateLimits":{"primary":{"usedPercent":100,"windowDurationMins":300,"resetsAt":1790000123},"weekly":{"usedPercent":100,"windowDurationMins":10080,"resetsAt":1790600000}}}}
